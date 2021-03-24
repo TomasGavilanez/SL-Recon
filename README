@@ -1,0 +1,19 @@
+# SL-Recon
+Software of Sing Language Recognition 
+All of this project was developed in Visual Studio, the complete files to run this application are avaliable in "SLreconv1.rar". 
+If you only want to review the code I attached the code of the main and help windows. 
+Is important to install Kinect Sofware Development Kit SDK version 1.8.
+To run this application go to this address \Version1\SLreconv1\SLreconv1\obj\Debug and execute "SLreconv1.exe"
+For use the aplication follow this steps:
+  1) Press Button "Cargar Datos de la red Neuronal" 
+  2) Select Test mode
+  3) Verify if the person is in front of kinect sensor.
+  4) Press Start Button (the person have to make the sign when the green light turn on)
+  5) Wait until the counter reaches 30
+  6) Verify the results 
+  7) Push Stop Buttom 
+This system only was trained to recognize 5 signs: Take", "Hello", "Good Morning" "Good Night" and "How are you?". According to the Ecuadorian sign language.
+NOTES:
+*Important: You have to connect the Kinect before run the application. 
+**This Research was applied to Ecuador so the official language is Spanish
+***If you need more info please contact me at: ing.tomas_gavilanez@hotmail.com 
