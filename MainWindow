@@ -1,0 +1,520 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Navigation;
+using System.Windows.Shapes;
+using Microsoft.Kinect;
+using System.IO;
+using System.Threading;
+
+
+namespace SLreconv1
+{
+    /// <summary>
+    /// Lógica de interacción para MainWindow.xaml
+    /// </summary>
+    public partial class MainWindow : Window
+    {
+        KinectSensor miKinect;
+        //Variables Globales
+        int cont = 0, rec = 0, aux = 0, exp = 0, vis = 0, aux1 = 0, modo = 0, nnaux = 0;//modo=1 para test, modo=2 para train
+        int numerodatos = 30;
+        List<float> Listadatos = new List<float>();
+        float[,] Arraydatos = new float[50, 18];
+        float[,] Arraycero = new float[50, 18];
+        string exportar = "", tiposeña = "";
+        float HeadX, HeadY, HeadZ, ShoulderCX, ShoulderCY, ShoulderCZ, ShoulderLX, ShoulderLY, ShoulderLZ, ShoulderRX, ShoulderRY, ShoulderRZ, ElbowLX, ElbowLY, ElbowLZ, ElbowRX, ElbowRY, ElbowRZ;
+        float WristLX, WristLY, WristLZ, WristRX, WristRY, WristRZ, HandRightX, HandRightY, HandRightZ, HandLeftX, HandLeftY, HandLeftZ, SpineX, SpineY, SpineZ, HipCX, HipCY, HipCZ;
+
+        private void ButtonAyuda_Click(object sender, RoutedEventArgs e)
+        {
+            Window1 Ventana = new Window1();
+            Ventana.Owner = this;
+            Ventana.ShowDialog();
+            
+        }
+
+        //Variables de la Red Neuronal Ajustar si se cambia la estructura
+        double[,] Extraer = new double[75, 90];//Extrae las Variables 
+        double[,] W11 = new double[30, 180];//Matriz de pesos [capa 1]
+        double[,] W12 = new double[5, 30];//Matriz de pesos [capa 2]
+        double[] Offset = new double[180];//Ofsets
+        double[] gain = new double[180];//Ganancias
+        double ymin;//ajuste 
+        double[] U1 = new double[30];//Matriz de Umbrales [capa 1]
+        double[] U2 = new double[5];//Umbral [capa 2]
+        double[] A1 = new double[30];//Matriz de Salidas [capa 1]
+        double[] A2 = new double[5];//Salida [capa 2]
+        double[] A1t = new double[30];//Matriz de Salidas con ft [capa 1]
+        double nnaux1 = 0, nnsum = 0, nnmax = 0;
+        double[] Input = new double[180];//Entrada a la Red Neuronal
+        double[] Xp1 = new double[180];//Salida Capa 1
+        double[] Xp2 = new double[5];//Salida Capa 2
+        double[] ANNY = new double[5];//Salida de la Red Neuronal
+        double[] ANNnum = new double[5];
+        double ANNden;
+        string resultado = "";
+        private void but_lnn_Click(object sender, RoutedEventArgs e)
+        {
+            //Cargar los Datos a la red Neuronal
+            nnaux = 1;
+            int linea = 0;int aux2m = 0;
+            TextReader leer_datos;
+            leer_datos = new StreamReader("Pesos_Umbrales2.txt");
+        
+            string registro = leer_datos.ReadLine();//Formato del txt 
+            while ((registro != null) )//Extraigo todas las variables del txt en Extraer
+            { 
+               for(int i=0;i<90;i++) //cambiar a numerodatos
+                {
+                    int pos = registro.IndexOf(';');//separador de punto y coma
+                    if (pos != -1)
+                    {
+                        double numero = Convert.ToDouble(registro.Substring(0, pos));
+                        Extraer[linea, i] = numero;
+                        registro = registro.Substring(pos + 1);
+                    }
+                }
+                registro = leer_datos.ReadLine();
+                linea++;
+            }
+            leer_datos.Close();
+            //Asigno pesos W y umbrales
+            for (int i = 0; i < 90; i++)
+            {
+                Offset[i] = Extraer[0, i];
+                Offset[i + 90] = Extraer[1, i];
+                gain[i] = Extraer[2, i];
+                gain[i + 90] = Extraer[3, i];
+
+            }
+            ymin = Extraer[4, 0];
+            for (int i = 0; i < 60;i=i+2)
+            {
+                for(int j = 0; j < 90; j++)
+                {
+                    W11[aux2m, j] = Extraer[i+5, j];
+                    W11[aux2m, j+90] = Extraer[i + 6, j];
+                }
+                aux2m++;
+            }
+            
+            for (int i = 0; i < 5; i++)
+            {
+                for (int j = 0; j < 30; j++)
+                {
+                    W12[i, j] = Extraer[i+65, j];
+                }
+            }
+            for (int i = 0; i < 30; i++)
+            {
+                U1[i] = Extraer[70, i];
+            }
+            for (int i = 0; i < 5; i++)
+            {
+                U2[i] = Extraer[71, i];
+            }
+            modotest.IsEnabled = true;
+
+            //textBlockDatos.Text = "Cantidad de Datos:  "+U2[4]+" "+W12[0,0];
+            //Condicion de existencia de datos--opcional
+            //IMPORTANTE OPCION 2*******OJO////
+            MessageBoxResult result = MessageBox.Show("Red Neuronal Cargada Correctamente", "Confirmation");
+        }
+        private void modotest_Checked(object sender, RoutedEventArgs e)
+        {
+            //Habilito Controladores del modo Test
+           // buttonstart.IsEnabled = false;
+            //buttonstop.IsEnabled = false;
+            //textBoxSena.IsEnabled = false;
+            modo = 1;
+        }
+
+        private void modotrain_Checked(object sender, RoutedEventArgs e)
+        {
+            //Habilito Controladores del modo Train 
+            buttonstart.IsEnabled = true;
+            buttonstop.IsEnabled = true;
+            textBoxSena.IsEnabled = true;
+            modo = 2;
+        }
+
+       
+        public MainWindow()
+        {
+            InitializeComponent();
+        }
+
+        private void Window_Loaded(object sender, RoutedEventArgs e)
+        {
+            //Setear Marcadores
+            //Color stream
+            miKinect = KinectSensor.KinectSensors.FirstOrDefault();
+            miKinect.Start();
+            miKinect.ColorStream.Enable();
+            miKinect.SkeletonStream.Enable();
+            //formato RGB por defecto 640x480 30ps
+            miKinect.ColorFrameReady += MiKinect_ColorFrameReady;
+            //Skeletal tracking event handler
+            miKinect.SkeletonFrameReady += MiKinect_SkeletonFrameReady;
+            
+
+        }
+       
+        private void MiKinect_SkeletonFrameReady(object sender, SkeletonFrameReadyEventArgs e)
+        {
+            Canvaske.Children.Clear();
+            string posicion = "No hay datos de esqueleto";
+            string mensajestatus = "";
+      
+            Skeleton[] esqueletos = null;
+            using(SkeletonFrame framesEsqueleto = e.OpenSkeletonFrame())
+            {
+                if(framesEsqueleto != null)
+                {
+                    esqueletos = new Skeleton[framesEsqueleto.SkeletonArrayLength];
+                    framesEsqueleto.CopySkeletonDataTo(esqueletos);
+                }
+            }
+            if (esqueletos == null) return;
+            foreach (Skeleton esqueleto in esqueletos)
+            {
+                if (esqueleto.TrackingState == SkeletonTrackingState.Tracked)//verifica si el esqueleto esta detectado
+                {
+                    if (esqueleto.ClippedEdges == 0)//verifico que el individuo este en rango de operación del kinect
+                    {
+                        mensajestatus = "Ubicado Correcamente";
+                    }
+                    else
+                    {
+                        if ((esqueleto.ClippedEdges & FrameEdges.Bottom) != 0)
+                            // mensajestatus += "Moverse mas arriba";
+                            if ((esqueleto.ClippedEdges & FrameEdges.Top) != 0)
+                                mensajestatus += "Moverse mas abajo";
+                        if ((esqueleto.ClippedEdges & FrameEdges.Right) != 0)
+                            mensajestatus += "Moverse mas a la izquierda";
+                        if ((esqueleto.ClippedEdges & FrameEdges.Left) != 0)
+                            mensajestatus += "Moverse mas a la derecha";
+                    }
+                    //Extraer los datos del esqueleto
+                    Joint jointManoiz = esqueleto.Joints[JointType.HandLeft];
+                    Joint jointHombroiz = esqueleto.Joints[JointType.ShoulderLeft];
+                    Joint jointCodoiz = esqueleto.Joints[JointType.ElbowLeft];
+                    Joint jointMunecaiz = esqueleto.Joints[JointType.WristLeft];
+                    Joint jointHombrocen = esqueleto.Joints[JointType.ShoulderCenter];
+                    Joint joinCabeza = esqueleto.Joints[JointType.Head];
+                    Joint jointManode = esqueleto.Joints[JointType.HandRight];
+                    Joint jointHombrode = esqueleto.Joints[JointType.ShoulderRight];
+                    Joint jointCodode = esqueleto.Joints[JointType.ElbowRight];
+                    Joint jointMunecade = esqueleto.Joints[JointType.WristRight];
+                    //Guardo las variables en formato junta 
+                    SkeletonPoint posManoiz = jointManoiz.Position;
+                    SkeletonPoint posHombroiz = jointHombroiz.Position;
+                    SkeletonPoint posCodoiz = jointCodoiz.Position;
+                    SkeletonPoint posMunecaiz = jointMunecaiz.Position;
+                    SkeletonPoint posHombrocen = jointHombrocen.Position;
+                    SkeletonPoint posCabeza = joinCabeza.Position;
+                    SkeletonPoint posManode = jointManode.Position;
+                    SkeletonPoint posHombrode = jointHombrode.Position;
+                    SkeletonPoint posCodode = jointCodode.Position;
+                    SkeletonPoint posMunecade = jointMunecade.Position;
+                    // Lineas para las juntas (Huesos) 
+                    Line h1 = new Line(); h1.Stroke = new SolidColorBrush(Colors.Blue); h1.StrokeThickness = 5;
+                    Line h2 = new Line(); h2.Stroke = new SolidColorBrush(Colors.Blue); h2.StrokeThickness = 5;
+                    Line h3 = new Line(); h3.Stroke = new SolidColorBrush(Colors.Blue); h3.StrokeThickness = 5;
+                    Line h4 = new Line(); h4.Stroke = new SolidColorBrush(Colors.Blue); h4.StrokeThickness = 5;
+                    Line h5 = new Line(); h5.Stroke = new SolidColorBrush(Colors.Blue); h5.StrokeThickness = 5;
+                    Line h6 = new Line(); h6.Stroke = new SolidColorBrush(Colors.Blue); h6.StrokeThickness = 5;
+                    Line h7 = new Line(); h7.Stroke = new SolidColorBrush(Colors.Blue); h7.StrokeThickness = 5;
+                    Line h8 = new Line(); h8.Stroke = new SolidColorBrush(Colors.Blue); h8.StrokeThickness = 5;
+                    Line h9 = new Line(); h9.Stroke = new SolidColorBrush(Colors.Blue); h9.StrokeThickness = 5;
+                    //mapeo de puntos de esqueleto a puntos de color 3D--->2D
+                    ColorImagePoint pCabeza = miKinect.CoordinateMapper.MapSkeletonPointToColorPoint(posCabeza, ColorImageFormat.RgbResolution640x480Fps30);
+                    ColorImagePoint pHombrocen = miKinect.CoordinateMapper.MapSkeletonPointToColorPoint(posHombrocen, ColorImageFormat.RgbResolution640x480Fps30);
+                    ColorImagePoint pHombroiz = miKinect.CoordinateMapper.MapSkeletonPointToColorPoint(posHombroiz, ColorImageFormat.RgbResolution640x480Fps30);
+                    ColorImagePoint pCodoiz = miKinect.CoordinateMapper.MapSkeletonPointToColorPoint(posCodoiz, ColorImageFormat.RgbResolution640x480Fps30);
+                    ColorImagePoint pMunecaiz = miKinect.CoordinateMapper.MapSkeletonPointToColorPoint(posMunecaiz, ColorImageFormat.RgbResolution640x480Fps30);
+                    ColorImagePoint pManoiz = miKinect.CoordinateMapper.MapSkeletonPointToColorPoint(posManoiz, ColorImageFormat.RgbResolution640x480Fps30);
+                    ColorImagePoint pHombrode = miKinect.CoordinateMapper.MapSkeletonPointToColorPoint(posHombrode, ColorImageFormat.RgbResolution640x480Fps30);
+                    ColorImagePoint pCodode = miKinect.CoordinateMapper.MapSkeletonPointToColorPoint(posCodode, ColorImageFormat.RgbResolution640x480Fps30);
+                    ColorImagePoint pMunecade = miKinect.CoordinateMapper.MapSkeletonPointToColorPoint(posMunecade, ColorImageFormat.RgbResolution640x480Fps30);
+                    ColorImagePoint pManode = miKinect.CoordinateMapper.MapSkeletonPointToColorPoint(posManode, ColorImageFormat.RgbResolution640x480Fps30);
+                    //Establesco puntos de las lineas
+                    h1.X1 = pCabeza.X; h1.Y1 = pCabeza.Y; h1.X2 = pHombrocen.X; h1.Y2 = pHombrocen.Y;
+                    h2.X1 = pHombrocen.X; h2.Y1 = pHombrocen.Y; h2.X2 = pHombrode.X; h2.Y2 = pHombrode.Y;
+                    h3.X1 = pHombrocen.X; h3.Y1 = pHombrocen.Y; h3.X2 = pHombroiz.X; h3.Y2 = pHombroiz.Y;
+                    h4.X1 = pHombrode.X; h4.Y1 = pHombrode.Y; h4.X2 = pCodode.X; h4.Y2 = pCodode.Y;
+                    h5.X1 = pHombroiz.X; h5.Y1 = pHombroiz.Y; h5.X2 = pCodoiz.X; h5.Y2 = pCodoiz.Y;
+                    h6.X1 = pCodode.X; h6.Y1 = pCodode.Y; h6.X2 = pMunecade.X; h6.Y2 = pMunecade.Y;
+                    h7.X1 = pCodoiz.X; h7.Y1 = pCodoiz.Y; h7.X2 = pMunecaiz.X; h7.Y2 = pMunecaiz.Y;
+                    h8.X1 = pMunecade.X; h8.Y1 = pMunecade.Y; h8.X2 = pManode.X; h8.Y2 = pManode.Y;
+                    h9.X1 = pMunecaiz.X; h9.Y1 = pMunecaiz.Y; h9.X2 = pManoiz.X; h9.Y2 = pManoiz.Y;
+                    //Vinculo lineas con canvas
+                    Canvaske.Children.Add(h1);
+                    Canvaske.Children.Add(h2);
+                    Canvaske.Children.Add(h3);
+                    Canvaske.Children.Add(h4);
+                    Canvaske.Children.Add(h5);
+                    Canvaske.Children.Add(h6);
+                    Canvaske.Children.Add(h7);
+                    Canvaske.Children.Add(h8);
+                    Canvaske.Children.Add(h9);
+                    //Puntos en formato float 
+                    HeadX = esqueleto.Joints[JointType.Head].Position.X;
+                    HeadY = esqueleto.Joints[JointType.Head].Position.Y;
+                    HeadZ = esqueleto.Joints[JointType.Head].Position.Z;
+                    ShoulderCX = esqueleto.Joints[JointType.ShoulderCenter].Position.X;
+                    ShoulderCY = esqueleto.Joints[JointType.ShoulderCenter].Position.Y;
+                    ShoulderCZ = esqueleto.Joints[JointType.ShoulderCenter].Position.Z;
+                    ShoulderLX = esqueleto.Joints[JointType.ShoulderLeft].Position.X;
+                    ShoulderLY = esqueleto.Joints[JointType.ShoulderLeft].Position.Y;
+                    ShoulderLZ = esqueleto.Joints[JointType.ShoulderLeft].Position.Z;
+                    ShoulderRX = esqueleto.Joints[JointType.ShoulderRight].Position.X;
+                    ShoulderRY = esqueleto.Joints[JointType.ShoulderRight].Position.Y;
+                    ShoulderRZ = esqueleto.Joints[JointType.ShoulderRight].Position.Z;
+                    ElbowLX = esqueleto.Joints[JointType.ElbowLeft].Position.X;
+                    ElbowLY = esqueleto.Joints[JointType.ElbowLeft].Position.Y;
+                    ElbowLZ = esqueleto.Joints[JointType.ElbowLeft].Position.Z;
+                    ElbowRX = esqueleto.Joints[JointType.ElbowRight].Position.X;
+                    ElbowRY = esqueleto.Joints[JointType.ElbowRight].Position.Y;
+                    ElbowRZ = esqueleto.Joints[JointType.ElbowRight].Position.Z;
+                    WristLX = esqueleto.Joints[JointType.WristLeft].Position.X;
+                    WristLY = esqueleto.Joints[JointType.WristLeft].Position.Y;
+                    WristLZ = esqueleto.Joints[JointType.WristLeft].Position.Z;
+                    WristRX = esqueleto.Joints[JointType.WristRight].Position.X;
+                    WristRY = esqueleto.Joints[JointType.WristRight].Position.Y;
+                    WristRZ = esqueleto.Joints[JointType.WristRight].Position.Z;
+                    HandRightX = esqueleto.Joints[JointType.HandRight].Position.X;
+                    HandRightY = esqueleto.Joints[JointType.HandRight].Position.Y;
+                    HandRightZ = esqueleto.Joints[JointType.HandRight].Position.Z;
+                    HandLeftX = esqueleto.Joints[JointType.HandLeft].Position.X;
+                    HandLeftY = esqueleto.Joints[JointType.HandLeft].Position.Y;
+                    HandLeftZ = esqueleto.Joints[JointType.HandLeft].Position.Z;
+                    SpineX = esqueleto.Joints[JointType.Spine].Position.X;
+                    SpineY = esqueleto.Joints[JointType.Spine].Position.Y;
+                    SpineZ = esqueleto.Joints[JointType.Spine].Position.Z;
+                    HipCX = esqueleto.Joints[JointType.HipCenter].Position.X;
+                    HipCY = esqueleto.Joints[JointType.HipCenter].Position.Y;
+                    HipCZ = esqueleto.Joints[JointType.HipCenter].Position.Z;
+                    //Coordenadas Relativas de los Puntos
+                    HandLeftX = HandLeftX - HipCX;
+                    HandLeftY = HandLeftY - HipCY;
+                    HandLeftZ = HandLeftZ - HipCZ;
+                    HandRightX = HandRightX - HipCX;
+                    HandRightY = HandRightY - HipCY;
+                    HandRightZ = HandRightZ - HipCZ;
+                    ElbowLX = ElbowLX - HipCX;
+                    ElbowRX = ElbowRX - HipCX;
+                    ElbowRZ = ElbowRZ - HipCZ;
+                    ElbowLZ = ElbowLZ - HipCZ;
+                    ElbowLY = ElbowLY - HipCY;
+                    ElbowRY = ElbowRY - HipCY;
+                    // Almaceno los datos
+                    if ((rec == 1 & cont<numerodatos))//ANTES if ((rec == 1 & cont<numerodatos)|(modo==1&cont<numerodatos))
+                    {
+                        //Prendo Y Apago el Indicador
+                        if (aux1 == 0 & vis==0)
+                        {
+                            rt_focooff.Visibility = System.Windows.Visibility.Collapsed;
+                            rt_focoon.Visibility = System.Windows.Visibility.Visible;
+              
+                        }
+                        if (aux1 == 15)
+                        {
+                            rt_focooff.Visibility = System.Windows.Visibility.Visible;
+                            rt_focoon.Visibility = System.Windows.Visibility.Collapsed;
+                            vis = 1;
+                        }
+                      
+                        if (((aux %= 5)==0)&vis==1) //Condicion para limitar datos de 30fps a 6fps
+                        {
+                            //Listadatos.Add(HandLeftX);//Lista
+                            Arraydatos[cont, 0] = HandLeftX;//Array
+                            Arraydatos[cont, 1] = HandLeftY;
+                            Arraydatos[cont, 2] = HandLeftZ;
+                            Arraydatos[cont, 3] = HandRightX;
+                            Arraydatos[cont, 4] = HandRightY;
+                            Arraydatos[cont, 5] = HandRightZ;
+                            Arraydatos[cont, 6] = ElbowLX;
+                            Arraydatos[cont, 7] = ElbowLY;
+                            Arraydatos[cont, 8] = ElbowLZ;
+                            Arraydatos[cont, 9] = WristLX;
+                            Arraydatos[cont, 10] = WristLY;
+                            Arraydatos[cont, 11] = WristLZ;                        
+                            Arraydatos[cont, 12] = WristRX;
+                            Arraydatos[cont, 13] = WristRY;
+                            Arraydatos[cont, 14] = WristRZ;
+                            Arraydatos[cont, 15] = ElbowRX;
+                            Arraydatos[cont, 16] = ElbowRY;
+                            Arraydatos[cont, 17] = ElbowRZ;
+                            cont++;
+                            //Indicador si es que hay datos o no (opcional)
+                        }
+                        aux++;
+                        aux1++;
+                        
+                    }
+                    if(cont==numerodatos & modo == 1)//Termino de capturar datos en el modo Train
+                    {
+                        // condicion de existencia de datos (opcional)
+                        //Armo el vector de entrada 
+                        for(int i = 0; i < 30; i++)
+                        {
+                            Input[i] = Arraydatos[i, 3];//Xder
+                            Input[i+30] = Arraydatos[i, 4];//Yder
+                            Input[i+60] = Arraydatos[i, 5];//Zder
+                            Input[i + 90] = Arraydatos[i, 0];//xiz
+                            Input[i + 120] = Arraydatos[i, 1];//yiz
+                            Input[i + 150] = Arraydatos[i, 2];//ziz
+                        }
+                        if (nnaux == 1)
+                        {// Calculo de Salida de la Red Neuronal ----- Ajustar
+                            //Datos sobre la estructura de la Red
+                            int nnin = 180, nnout = 5, nnhide = 30, ncapas = 3;
+
+                            //Calculo de salida v2
+                            for(int i = 0; i < nnin; i++)
+                            {
+                                Xp1[i] = Input[i] - Offset[i];//resto offsets
+                                Xp1[i] = Xp1[i] * gain[i];//Multiplico por la ganancia
+                                Xp1[i] = Xp1[i] + ymin;//sumo minimo
+                            }
+                            //Multiplico entrada por pesos 1
+                            for(int i = 0; i < nnhide; i++)
+                            {
+                                nnsum = 0;
+                                for(int j = 0; j < nnin; j++)
+                                {
+                                    nnsum = W11[i, j] * Xp1[j] + nnsum;
+                                }
+                                A1[i] = nnsum;
+                            }
+                            //Sumo el Bias 
+                            for(int i = 0; i < nnhide; i++)
+                            {
+                                A1[i] = A1[i] + U1[i];
+                            }
+                            //Funcion de transferencia
+                            for (int i = 0; i < nnhide; i++)
+                            {
+                                A1t[i] = ((2) / (1 + (System.Math.Pow(System.Math.E, (-2 * A1[i]))))) - 1;
+                            }
+                            //Multiplico salida At por pesos 2
+                            for(int i = 0; i < nnout; i++)
+                            {
+                                nnsum = 0;
+                                for(int j = 0; j < nnhide; j++)
+                                {
+                                    nnsum = W12[i, j] * A1t[j] + nnsum;
+                                }
+                                Xp2[i] = nnsum;
+                            }
+                            //Sumo el Bias
+                            for(int i = 0; i < nnout; i++)
+                            {
+                                Xp2[i] = Xp2[i] + U2[i];
+                            }
+                            //Calculo el máximo
+                            nnmax = 0;ANNden = 0;
+                            for(int i = 0; i < nnout; i++)
+                            {
+                                if (Xp2[i] > nnmax)
+                                {
+                                    nnmax = Xp2[i];
+                                }
+                            }
+                            //Funcion de transferencia 2
+                            for (int i = 0; i < nnout; i++)
+                            {
+                                ANNnum[i] = System.Math.Pow(System.Math.E, (Xp2[i] - nnmax));//numerador
+                            }
+                            for (int i = 0; i < nnout; i++)
+                            {
+                                ANNden = ANNnum[i] + ANNden;
+                            }
+                            for (int i = 0; i < nnout; i++)
+                            {
+                                ANNY[i] = ANNnum[i] / ANNden;
+                            }
+                                //Imprimo resultados 
+                                textBlockResults.Text = string.Format("Resultados: S1: {0:0.00} S2: {1:0.00} S3: {2:0.00} S4: {3:0.00} S5: {4:0.00}", ANNY[0], ANNY[1], ANNY[2], ANNY[3], ANNY[4]);
+                            if (ANNY[0] > 0.5) { resultado ="     Buenos Días"; }
+                            if (ANNY[1] > 0.5){ resultado = " Buenas Noches";}
+                            if (ANNY[2] > 0.5) { resultado ="          Hola"; }
+                            if (ANNY[3] > 0.5) { resultado =" Entregar/Tomar"; }
+                            if (ANNY[4] > 0.5) { resultado ="  ¿Cómo estás?"; }
+                            textBlockRespal.Text = resultado;
+                            resultado = "";
+                            
+                            //Encero Variables
+                            nnsum = 0; nnmax = 0;
+                            ANNY[0] = 0; ANNY[1] = 0; ANNY[3] = 0; ANNY[4] = 0; ANNY[2] = 0;ANNden = 0;
+                            ANNnum[0] = 0; ANNnum[1] = 0;ANNnum[2] = 0; ANNnum[3] = 0; ANNnum[4] = 0;
+                            A1[0] = 0;A2[0] = 0;
+
+                        }
+                        //Encero Variables
+                        vis = 0; aux1 = 0; //cont = 0; //OJO Quitar comentario para repetir ciclicamente
+                    }
+                    //Muestra posiciones exqueleto
+                    posicion = string.Format("Mano izquierda: X:{0:0.00} Y:{1:0.0} Z:{2:0.00}", posManoiz.X, posManoiz.Y, posManoiz.Z)+"\n"+string.Format("Mano derecha: X:{0:0.00} Y:{1:0.00} Z:{2:0.00}", posManode.X, posManode.Y, posManode.Z)+"\n"+ string.Format("Hip Center Referencia: X:{0:0.00} Y:{1:0.00} Z:{2:0.00}",HipCX,HipCY,HipCZ);
+                }
+
+            }
+            textBlockPos.Text = posicion;
+            textBlockStatus.Text = mensajestatus;
+            textBlockDatos.Text = "Cantidad de Datos:  "+cont;
+        }
+
+        private void buttonstart_Click(object sender, RoutedEventArgs e)
+        {
+            rec = 1;
+        }
+
+        private void buttonstop_Click(object sender, RoutedEventArgs e)
+        {
+            rec = 0;
+            exp++;
+            exportar = "Datos_"+exp;
+            tiposeña = textBoxSena.Text;
+            //textBlockDatos.Text = "Numero: " + Arraydatos;
+            using(StreamWriter writer=new StreamWriter(exportar+".txt", false))
+            {
+                writer.WriteLine(tiposeña);
+                writer.WriteLine("            ManoIzquierda                                              ManoDerecha                                 ");
+                writer.WriteLine("DatoX          DatoY          DatoZ"+ "   DatoX          DatoY          DatoZ");
+                for (int i = 0; i < numerodatos; i++)
+                {
+                    writer.WriteLine(Arraydatos[i, 0].ToString()+" ; "+ Arraydatos[i, 1].ToString()+" ; "+ Arraydatos[i, 2].ToString()+" ; "+ Arraydatos[i, 3].ToString() + " ; " + Arraydatos[i,4].ToString() + " ; " + Arraydatos[i,5].ToString());
+                }
+            }
+            //Encerar Variables
+            textBlockRespal.Text ="";
+            cont = 0; vis = 0;aux1 = 0;
+            Arraydatos = Arraycero;
+        }
+
+        private void MiKinect_ColorFrameReady(object sender, ColorImageFrameReadyEventArgs e)
+        {
+            using(ColorImageFrame frameImagen = e.OpenColorImageFrame())
+            {
+                if (frameImagen == null) return;
+                byte[] datosColor = new byte[frameImagen.PixelDataLength];
+                //Dato byte 0-255 para almacenar la imagen RBB=32 
+                frameImagen.CopyPixelDataTo(datosColor);
+                vidmos.Source = BitmapSource.Create(
+                    frameImagen.Width, frameImagen.Height, 96, 96, PixelFormats.Bgr32, null, datosColor, frameImagen.Width * frameImagen.BytesPerPixel);
+
+            }
+        }
+    }
+}
